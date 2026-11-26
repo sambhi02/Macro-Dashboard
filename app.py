@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from fredapi import Fred
 
 # ----------------------------------------------------------------------------
@@ -290,6 +291,66 @@ def render_scorecard(data):
 # ----------------------------------------------------------------------------
 # Chart helper
 # ----------------------------------------------------------------------------
+CHART_HEIGHT = 330
+
+# Phone behaviour: slide a finger sideways across a chart to scrub through the data
+# (hover label follows your finger); swipe up/down still scrolls the page; tap shows a point.
+# Desktop mouse hover is unchanged.
+TOUCH_SCRUB = """
+<style>
+  body {margin: 0; background: white;}
+  #wrap, #wrap * {touch-action: pan-y !important; -webkit-user-select: none; user-select: none;}
+</style>
+<script>
+(function () {
+  var wrap = document.getElementById('wrap');
+  var gd = document.getElementById('chart');
+  if (!wrap || !gd) return;
+  var sx = 0, sy = 0, mode = null;
+
+  function hoverAt(t) {
+    try {
+      var L = gd._fullLayout;
+      if (!L || !window.Plotly) return;
+      var r = gd.getBoundingClientRect();
+      var x = Math.max(0, Math.min(L._size.w, t.clientX - r.left - L._size.l));
+      Plotly.Fx.hover(gd, {xpx: x, ypx: L._size.h / 2});
+    } catch (err) {}
+  }
+
+  wrap.addEventListener('touchstart', function (e) {
+    var t = e.touches[0]; sx = t.clientX; sy = t.clientY; mode = null;
+    e.stopPropagation();
+  }, {capture: true, passive: true});
+
+  wrap.addEventListener('touchmove', function (e) {
+    var t = e.touches[0];
+    if (mode === null) {
+      var dx = Math.abs(t.clientX - sx), dy = Math.abs(t.clientY - sy);
+      if (dx < 4 && dy < 4) return;
+      mode = dx > dy ? 'scrub' : 'scroll';
+    }
+    e.stopPropagation();
+    if (mode === 'scrub') { if (e.cancelable) e.preventDefault(); hoverAt(t); }
+  }, {capture: true, passive: false});
+
+  wrap.addEventListener('touchend', function (e) {
+    e.stopPropagation();
+    if (mode === null) { if (e.cancelable) e.preventDefault(); hoverAt(e.changedTouches[0]); }
+  }, {capture: true, passive: false});
+})();
+</script>
+"""
+
+
+def render_fig(fig):
+    html = fig.to_html(
+        include_plotlyjs="cdn", full_html=False, div_id="chart",
+        config={"displayModeBar": False, "responsive": True, "scrollZoom": False},
+        default_width="100%", default_height=f"{CHART_HEIGHT}px",
+    )
+    components.html(f"<div id='wrap'>{html}</div>{TOUCH_SCRUB}", height=CHART_HEIGHT + 8)
+
 def make_chart(data, lines, title, units, start, recessions,
                kind="line", ref_line=None, ref_label=None):
     fig = go.Figure()
@@ -325,15 +386,17 @@ def make_chart(data, lines, title, units, start, recessions,
 
     fig.update_layout(
         title=dict(text=f"<b>{title}</b>", x=0, xanchor="left", font=dict(size=15, color=TEXT)),
-        height=330, margin=dict(l=8, r=8, t=56, b=8),
+        height=CHART_HEIGHT, margin=dict(l=8, r=8, t=56, b=8),
+        dragmode=False,  # no drag-to-zoom (phones or laptop)
         paper_bgcolor="white", plot_bgcolor="white",
         font=dict(family="Inter, -apple-system, Segoe UI, sans-serif", color="#4A5568", size=12),
         hovermode="x unified", showlegend=len(lines) > 1,
         legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
-        xaxis=dict(showgrid=False, linecolor=GRID),
-        yaxis=dict(gridcolor=GRID, zeroline=False, title=dict(text=units, font=dict(size=11))),
+        xaxis=dict(showgrid=False, linecolor=GRID, fixedrange=True),
+        yaxis=dict(gridcolor=GRID, zeroline=False, fixedrange=True,
+                   title=dict(text=units, font=dict(size=11))),
     )
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    render_fig(fig)
     ids = ", ".join(SERIES[k]["id"] if k in SERIES else DERIVED.get(k, k) for k, _ in lines)
     as_of = max(latest_dates).strftime("%b %d, %Y") if latest_dates else "n/a"
     st.caption(f"Source: FRED ({ids}) · Latest observation: {as_of}")
