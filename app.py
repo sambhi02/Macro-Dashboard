@@ -114,12 +114,21 @@ DERIVED = {"real_wage": "CES0500000003 minus CPIAUCSL, y/y"}
 # ----------------------------------------------------------------------------
 # Data loading (cached = auto refresh)
 # ----------------------------------------------------------------------------
+def _months_ago(s: pd.Series, n: int) -> pd.Series:
+    """Value from exactly n calendar months earlier, matched by date (NaN if that month is missing)."""
+    prior = s.copy()
+    prior.index = prior.index + pd.DateOffset(months=n)
+    return prior[~prior.index.duplicated()].reindex(s.index)
+
+
 def _transform(s: pd.Series, how, scale) -> pd.Series:
+    # Match by calendar date, not row position, so a missing month (e.g. the Oct 2025
+    # government-shutdown gap in CPI) can't turn a 12-month change into a 13-month one.
     s = s.astype(float).dropna()
     if how == "yoy":
-        s = s.pct_change(12, fill_method=None) * 100
+        s = (s / _months_ago(s, 12) - 1) * 100
     elif how == "diff":
-        s = s.diff()
+        s = s - _months_ago(s, 1)
     return (s * scale).dropna()
 
 
