@@ -200,8 +200,10 @@ def kpi_card(data, key, label, unit="%", decimals=2, up_is_bad=None):
 # ----------------------------------------------------------------------------
 # Recession risk scorecard (rules of thumb — tweak thresholds as you learn)
 # ----------------------------------------------------------------------------
-def _last(data, key):
+def _last(data, key, as_of=None):
     s = data.get(key)
+    if s is not None and as_of is not None:
+        s = s[s.index <= as_of]
     return None if s is None or s.empty else s
 
 
@@ -211,35 +213,37 @@ def _band(v, red, yellow, higher_is_worse=True):
     return "red" if v <= red else "yellow" if v <= yellow else "green"
 
 
-def score_items(data):
+def score_items(data, as_of=None):
+    """Scorecard signals using data available up to `as_of` (default: latest)."""
     items = []
+    _l = lambda key: _last(data, key, as_of)  # noqa: E731
 
-    s = _last(data, "curve_3m")
+    s = _l("curve_3m")
     if s is not None:
         v = s.iloc[-1]
         items.append(("Yield curve (10Y–3M)", f"{v:+.2f} pts", _band(v, 0, 0.5, False),
                       "Red if inverted (below 0); yellow under +0.50"))
 
-    s = _last(data, "sahm")
+    s = _l("sahm")
     if s is not None:
         v = s.iloc[-1]
         items.append(("Sahm rule", f"{v:.2f}", _band(v, 0.5, 0.3),
                       "Red at 0.50+ (historical recession trigger)"))
 
-    s = _last(data, "claims_4wk")
+    s = _l("claims_4wk")
     if s is not None:
         window = s[s.index >= s.index[-1] - pd.Timedelta(days=365)]
         v = (s.iloc[-1] / window.min() - 1) * 100
         items.append(("Jobless claims (4-wk avg)", f"{s.iloc[-1]:.0f}k · +{v:.0f}% vs 1-yr low",
                       _band(v, 20, 10), "Red if 20%+ above its 1-year low"))
 
-    s = _last(data, "hy_spread")
+    s = _l("hy_spread")
     if s is not None:
         v = s.iloc[-1]
         items.append(("High-yield credit spread", f"{v:.2f}%", _band(v, 6, 4.5),
                       "Red above 6%; yellow above 4.5%"))
 
-    s = _last(data, "sentiment")
+    s = _l("sentiment")
     if s is not None:
         prior = s[s.index <= s.index[-1] - pd.DateOffset(months=12)]
         if not prior.empty:
@@ -247,19 +251,19 @@ def score_items(data):
             items.append(("Consumer sentiment", f"{s.iloc[-1]:.1f} ({v:+.1f} vs 1 yr ago)",
                           _band(v, -10, -5, False), "Red if down 10+ points in a year"))
 
-    s = _last(data, "real_wage")
+    s = _l("real_wage")
     if s is not None:
         v = s.iloc[-1]
         items.append(("Real wage growth", f"{v:+.1f}% y/y", _band(v, 0, 1, False),
                       "Red if wages trail inflation (below 0)"))
 
-    s = _last(data, "indpro_yoy")
+    s = _l("indpro_yoy")
     if s is not None:
         v = s.iloc[-1]
         items.append(("Industrial production", f"{v:+.1f}% y/y", _band(v, -1, 1, False),
                       "Red if shrinking more than 1% y/y"))
 
-    s = _last(data, "vix")
+    s = _l("vix")
     if s is not None:
         v = s.iloc[-1]
         items.append(("Market stress (VIX)", f"{v:.1f}", _band(v, 30, 20),
@@ -267,15 +271,19 @@ def score_items(data):
     return items
 
 
+def summarize(items):
+    reds = sum(1 for i in items if i[2] == "red")
+    yellows = sum(1 for i in items if i[2] == "yellow")
+    share = (reds * 2 + yellows) / (len(items) * 2)
+    level, tone = ("Low", "green") if share <= 0.25 else ("Moderate", "yellow") if share <= 0.5 else ("High", "red")
+    return level, tone, reds, yellows
+
+
 def render_scorecard(data):
     items = score_items(data)
     if not items:
         return
-    reds = sum(1 for i in items if i[2] == "red")
-    yellows = sum(1 for i in items if i[2] == "yellow")
-    points, max_points = reds * 2 + yellows, len(items) * 2
-    share = points / max_points
-    level, tone = ("Low", "green") if share <= 0.25 else ("Moderate", "yellow") if share <= 0.5 else ("High", "red")
+    level, tone, reds, yellows = summarize(items)
     fg, bg = STATUS[tone]
 
     html = [
@@ -295,6 +303,71 @@ def render_scorecard(data):
     html.append("</div>")
     st.markdown("".join(html), unsafe_allow_html=True)
     st.caption("Thresholds are rules of thumb, not forecasts. No single signal calls a recession; look at how many flash together.")
+
+
+# ----------------------------------------------------------------------------
+# Outlook archive: one file per month in outlooks/, named YYYY-MM.md
+# ----------------------------------------------------------------------------
+APP_DIR = Path(__file__).parent
+OUTLOOK_DIR = APP_DIR / "outlooks"
+
+
+def load_outlooks():
+    """Return [(month Timestamp, text)] newest first. Falls back to outlook.md."""
+    entries = []
+    if OUTLOOK_DIR.exists():
+        for f in OUTLOOK_DIR.glob("*.md"):
+            try:
+                month = pd.Timestamp(datetime.strptime(f.stem, "%Y-%m"))
+            except ValueError:
+                continue  # ignore files not named like 2026-11.md
+            entries.append((month, f.read_text()))
+    entries.sort(key=lambda e: e[0], reverse=True)
+    if not entries and (APP_DIR / "outlook.md").exists():
+        entries.append((pd.Timestamp.today().normalize().replace(day=1), (APP_DIR / "outlook.md").read_text()))
+    return entries
+
+
+def scorecard_strip(data, as_of):
+    items = score_items(data, as_of)
+    if not items:
+        return ""
+    level, tone, reds, yellows = summarize(items)
+    fg, bg = STATUS[tone]
+    dots = "".join(
+        f"<span style='white-space:nowrap;margin-right:14px;font-size:0.8rem;color:#4A5568'>"
+        f"<span class='dot' style='background:{STATUS[s][0]}'></span>{name}</span>"
+        for name, _, s, _ in items
+    )
+    return (
+        f"<div style='margin:4px 0 12px 0'>"
+        f"<span class='pill' style='color:{fg};background:{bg};font-weight:600'>{level} recession risk</span>"
+        f"<span style='font-size:0.8rem;color:#64748B;margin-left:10px'>{reds} red · {yellows} yellow · "
+        f"{len(items) - reds - yellows} green, as of {as_of:%b %d, %Y}</span>"
+        f"<div style='margin-top:8px;line-height:1.9'>{dots}</div></div>"
+    )
+
+
+def render_archive(data):
+    st.title("Outlook Archive")
+    st.markdown(
+        "<span style='color:#64748B'>Every monthly outlook I've published, next to what the recession risk "
+        "scorecard read at the time, so you can judge the calls in hindsight.</span>",
+        unsafe_allow_html=True,
+    )
+    entries = load_outlooks()
+    if not entries:
+        st.info("No outlooks yet. Add one as outlooks/YYYY-MM.md (for example outlooks/2026-11.md).")
+        return
+    today = pd.Timestamp.today().normalize()
+    for i, (month, text) in enumerate(entries):
+        as_of = min(month + pd.offsets.MonthEnd(0), today)
+        with st.container(border=True):
+            st.subheader(f"{month:%B %Y}" + ("  ·  Current" if i == 0 else ""))
+            st.markdown(scorecard_strip(data, as_of), unsafe_allow_html=True)
+            st.markdown(text)
+    st.caption("Scorecard readings are recalculated from today's FRED data as of each month-end, "
+               "so they include any later data revisions.")
 
 
 # ----------------------------------------------------------------------------
@@ -438,6 +511,20 @@ years = {"1Y": 1, "3Y": 3, "5Y": 5, "10Y": 10, "20Y": 20, "Max": 40}[horizon]
 start = pd.Timestamp.today().normalize() - pd.DateOffset(years=years)
 recs = recession_periods(data.get("recession")) if show_recessions else []
 
+# View switch at the top of the page (works on phones, where the sidebar is hidden).
+# Direct link to the archive: add ?view=archive to the URL.
+VIEWS = ["Dashboard", "Outlook Archive"]
+default_view = 1 if st.query_params.get("view") == "archive" else 0
+view = st.radio("View", VIEWS, index=default_view, horizontal=True, label_visibility="collapsed")
+if view == "Outlook Archive":
+    st.query_params["view"] = "archive"
+    render_archive(data)
+    st.markdown("---")
+    st.caption("For educational purposes only; not investment advice.")
+    st.stop()
+elif "view" in st.query_params:
+    del st.query_params["view"]
+
 # ----------------------------------------------------------------------------
 # Header, KPI strip, scorecard, outlook
 # ----------------------------------------------------------------------------
@@ -463,10 +550,12 @@ st.markdown(
 
 render_scorecard(data)
 
-outlook_path = Path(__file__).parent / "outlook.md"
+outlooks = load_outlooks()
 with st.container(border=True):
     st.subheader("My Market Outlook")
-    st.markdown(outlook_path.read_text() if outlook_path.exists() else "_Add your outlook in outlook.md_")
+    st.markdown(outlooks[0][1] if outlooks else "_Add your outlook as outlooks/YYYY-MM.md_")
+    if len(outlooks) > 1:
+        st.caption("Past outlooks: switch to Outlook Archive at the top of the page.")
 
 # ----------------------------------------------------------------------------
 # Sections
