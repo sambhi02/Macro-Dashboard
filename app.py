@@ -298,7 +298,7 @@ CHART_HEIGHT = 330
 # Desktop mouse hover is unchanged.
 TOUCH_SCRUB = """
 <style>
-  body {margin: 0; background: white;}
+  html, body {margin: 0; padding: 0; background: white; overflow: hidden;}
   #wrap, #wrap * {touch-action: pan-y !important; -webkit-user-select: none; user-select: none;}
 </style>
 <script>
@@ -349,7 +349,7 @@ def render_fig(fig):
         config={"displayModeBar": False, "responsive": True, "scrollZoom": False},
         default_width="100%", default_height=f"{CHART_HEIGHT}px",
     )
-    components.html(f"<div id='wrap'>{html}</div>{TOUCH_SCRUB}", height=CHART_HEIGHT + 8)
+    components.html(f"<div id='wrap'>{html}</div>{TOUCH_SCRUB}", height=CHART_HEIGHT + 16)
 
 def make_chart(data, lines, title, units, start, recessions,
                kind="line", ref_line=None, ref_label=None):
@@ -385,16 +385,16 @@ def make_chart(data, lines, title, units, start, recessions,
                       annotation_font=dict(size=10, color=GRAY))
 
     fig.update_layout(
-        title=dict(text=f"<b>{title}</b>", x=0, xanchor="left", font=dict(size=15, color=TEXT)),
-        height=CHART_HEIGHT, margin=dict(l=8, r=8, t=56, b=8),
+        title=dict(text=f"<b>{title}</b><br><span style='font-size:12px;color:#64748B'>{units}</span>",
+                   x=0, xanchor="left", y=0.97, yanchor="top", font=dict(size=15, color=TEXT)),
+        height=CHART_HEIGHT, margin=dict(l=44, r=12, t=70, b=36),
         dragmode=False,  # no drag-to-zoom (phones or laptop)
         paper_bgcolor="white", plot_bgcolor="white",
         font=dict(family="Inter, -apple-system, Segoe UI, sans-serif", color="#4A5568", size=12),
         hovermode="x unified", showlegend=len(lines) > 1,
         legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
-        xaxis=dict(showgrid=False, linecolor=GRID, fixedrange=True),
-        yaxis=dict(gridcolor=GRID, zeroline=False, fixedrange=True,
-                   title=dict(text=units, font=dict(size=11))),
+        xaxis=dict(showgrid=False, linecolor=GRID, fixedrange=True, automargin=True),
+        yaxis=dict(gridcolor=GRID, zeroline=False, fixedrange=True, automargin=True),
     )
     render_fig(fig)
     ids = ", ".join(SERIES[k]["id"] if k in SERIES else DERIVED.get(k, k) for k, _ in lines)
