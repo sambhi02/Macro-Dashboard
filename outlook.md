@@ -1,4 +1,4 @@
-**November 2026** · _Replace this with your own view each month (3–4 sentences)._
+**November 2026** · OVERLOOK COMING SOON...
 
 - **Policy:** Where is the Fed, and what is it signaling next?
 - **Rates & curve:** What are yields and the curve shape telling us about growth?
